@@ -1,0 +1,631 @@
+import axios from 'axios';
+
+const BASE_URL = 'https://localhost:7088/api';
+
+export default axios.create({
+
+baseURL: BASE_URL,
+
+headers: { 'Content-Type': 'application/json' },
+
+withCredentials: true
+
+});
+
+// A separate instance for authenticated calls (we will attach interceptors to this one later)
+
+export const axiosPrivate = axios.create({
+
+baseURL: BASE_URL,
+
+headers: { 'Content-Type': 'application/json' },
+
+withCredentials: true
+
+});
+
+
+
+
+
+"use client";
+
+import { useEffect } from "react";
+
+import { axiosPrivate } from "@/lib/axios";
+
+import { useAuth } from "@/Context/authContext";
+
+import axios from "@/lib/axios"; // standard axios for refresh call
+
+const useAxiosPrivate = () => {
+
+const { accessToken, setAccessToken } = useAuth();
+
+
+
+useEffect(() => {
+
+    // 1. Request Interceptor: Attach the Token from Memory
+
+    const requestIntercept = axiosPrivate.interceptors.request.use(
+
+        (config) => {
+
+            // ✅ Only attach token if it exists
+
+            if (accessToken && !config.headers['Authorization']) {
+
+                config.headers['Authorization'] = `Bearer ${accessToken}`;
+
+            }
+
+            return config;
+
+        },
+
+        (error) => Promise.reject(error)
+
+    );
+
+
+
+    // 2. Response Interceptor: Handle 401 Errors (Token Expired)
+
+    const responseIntercept = axiosPrivate.interceptors.response.use(
+
+        (response) => response,
+
+        async (error) => {
+
+            const prevRequest = error?.config;
+
+            
+
+            // If error is 401 and we haven't retried yet
+
+            if (error?.response?.status === 401 && !prevRequest?.sent) {
+
+                prevRequest.sent = true; // Prevent infinite loops
+
+                
+
+                try {
+
+                    // Call refresh endpoint (sends cookie automatically)
+
+                    const { data } = await axios.post(
+
+                        '/User/refresh-token',
+
+                        {},
+
+                        { withCredentials: true }
+
+                    );
+
+                    
+
+                    // Update memory with new token
+
+                    setAccessToken(data.accessToken);
+
+                    
+
+                    // Update the failed request with new token and retry it
+
+                    prevRequest.headers['Authorization'] = `Bearer ${data.accessToken}`;
+
+                    return axiosPrivate(prevRequest);
+
+                } catch (refreshError) {
+
+                    // If refresh fails (cookie expired), user is truly logged out
+
+                    return Promise.reject(refreshError);
+
+                }
+
+            }
+
+            return Promise.reject(error);
+
+        }
+
+    );
+
+
+
+    // Cleanup interceptors when component unmounts
+
+    return () => {
+
+        axiosPrivate.interceptors.request.eject(requestIntercept);
+
+        axiosPrivate.interceptors.response.eject(responseIntercept);
+
+    };
+
+}, [accessToken, setAccessToken]);
+
+
+
+return axiosPrivate;
+
+};
+
+export default useAxiosPrivate;
+
+
+
+
+
+"use client";
+
+import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+
+import axios from "@/lib/axios";
+
+import { jwtDecode } from "jwt-decode";
+
+interface AuthContextType {
+
+accessToken: string | null;
+
+setAccessToken: (token: string | null) => void;
+
+user: any;
+
+loading: boolean;
+
+}
+
+const AuthContext = createContext<AuthContextType>({} as AuthContextType);
+
+export const AuthProvider = ({ children }: { children: ReactNode }) => {
+
+const [accessToken, setAccessToken] = useState<string | null>(null);
+
+const [user, setUser] = useState<any>(null);
+
+const [loading, setLoading] = useState(true);
+
+
+
+useEffect(() => {
+
+    const verifyUser = async () => {
+
+        try {
+
+            const { data } = await axios.post('/User/refresh-token');
+
+            setAccessToken(data.accessToken);
+
+            setUser(jwtDecode(data.accessToken));
+
+        } catch (error: any) {
+
+            // Better error logging
+
+            if (error.code === 'ERR_NETWORK' || error.code === 'ERR_CONNECTION_REFUSED') {
+
+                console.error("Backend server is not running or not accessible");
+
+            } else {
+
+                console.log("No valid session found");
+
+            }
+
+            setAccessToken(null);
+
+            setUser(null);
+
+        } finally {
+
+            setLoading(false);
+
+        }
+
+    };
+
+
+
+    verifyUser();
+
+}, []);
+
+
+
+useEffect(() => {
+
+    if (accessToken) {
+
+        setUser(jwtDecode(accessToken));
+
+    } else {
+
+        setUser(null);
+
+    }
+
+}, [accessToken]);
+
+
+
+return (
+
+    <AuthContext.Provider value={{ accessToken, setAccessToken, user, loading }}>
+
+        {!loading && children}
+
+    </AuthContext.Provider>
+
+);
+
+};
+
+export const useAuth = () => useContext(AuthContext);
+
+
+
+
+
+
+'use client';
+
+import { useState } from 'react';
+
+import {
+
+Container,
+
+Paper,
+
+Title,
+
+Text,
+
+TextInput,
+
+PasswordInput,
+
+Button,
+
+Stack,
+
+Alert,
+
+Anchor,
+
+} from '@mantine/core';
+
+interface Props {
+
+onToggle: () => void;
+
+onSignUpSuccess: () => void;
+
+}
+
+export default function SignUp({ onToggle, onSignUpSuccess }: Props) {
+
+const [form, setForm] = useState({
+
+username: '',
+
+fullName: '',
+
+email: '',
+
+password: '',
+
+phone: '',
+
+});
+
+const [error, setError] = useState('');
+
+const [loading, setLoading] = useState(false);
+
+const handleSubmit = async (e: React.FormEvent) => {
+
+e.preventDefault();
+
+setLoading(true);
+
+setError('');
+
+
+
+try {
+
+  const res = await fetch('https://localhost:7088/api/User/register', {
+
+    method: 'POST',
+
+    headers: { 'Content-Type': 'application/json' },
+
+    body: JSON.stringify(form),
+
+  });
+
+
+
+  if (!res.ok) throw new Error('Registration failed');
+
+
+
+  onSignUpSuccess();
+
+} catch (err: any) {
+
+  setError(err.message);
+
+} finally {
+
+  setLoading(false);
+
+}
+
+};
+
+return (
+
+<Container size={420} my={40}>
+
+  <Paper withBorder p={30}>
+
+    <Title order={2}>Create Account</Title>
+
+
+
+    <form onSubmit={handleSubmit}>
+
+      <Stack>
+
+        {error && <Alert color="red">{error}</Alert>}
+
+
+
+        <TextInput label="Username" required onChange={(e) => setForm({ ...form, username: e.target.value })} />
+
+        <TextInput label="Full Name" required onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
+
+        <TextInput label="Email" required onChange={(e) => setForm({ ...form, email: e.target.value })} />
+
+        <PasswordInput label="Password" required onChange={(e) => setForm({ ...form, password: e.target.value })} />
+
+        <TextInput label="Phone" required onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+
+
+
+        <Button type="submit" loading={loading}>Register</Button>
+
+      </Stack>
+
+    </form>
+
+
+
+    <Text ta="center" mt="sm">
+
+      Already have an account? <Anchor onClick={onToggle}>Login</Anchor>
+
+    </Text>
+
+  </Paper>
+
+</Container>
+
+);
+
+}
+
+
+
+
+
+'use client';
+
+import { useState } from 'react';
+
+import { useRouter } from 'next/navigation';
+
+import {
+
+Container, Paper, Title, TextInput, PasswordInput,
+
+Button, Stack, Alert, Text, Divider, Anchor, ThemeIcon,
+
+} from '@mantine/core';
+
+import { useAuth } from '@/Context/authContext';
+
+import axios from '@/lib/axios'; // Use our configured axios
+
+import SignUp from './SignUp';
+
+export default function LoginPage() {
+
+const router = useRouter();
+
+const { setAccessToken } = useAuth(); // Get the setter from context
+
+const [username, setUsername] = useState('');
+
+const [password, setPassword] = useState('');
+
+const [error, setError] = useState('');
+
+const [loading, setLoading] = useState(false);
+
+const [showSignUp, setShowSignUp] = useState(false);
+
+const handleSubmit = async (e: React.FormEvent) => {
+
+e.preventDefault();
+
+setError('');
+
+setLoading(true);
+
+
+
+try {
+
+  // Use axios instead of fetch. 
+
+  // It automatically handles 'withCredentials: true' from our lib/axios.ts
+
+  const response = await axios.post('/User/login', { 
+
+    username, 
+
+    password 
+
+  });
+
+
+
+  const accessToken = response.data.accessToken;
+
+  
+
+  // 1. Save Token to Memory (Context)
+
+  setAccessToken(accessToken);
+
+
+
+  // 2. Check Role (Decoding is now safer to do via the context or just check response)
+
+  // Since we updated AuthContext to decode automatically, we can also check the token here manually for redirection
+
+  const payload = JSON.parse(atob(accessToken.split('.')[1]));
+
+  const role = payload.role || payload['http://schemas.microsoft.com/ws/2008/06/identity/claims/role'];
+
+
+
+  if (String(role).toLowerCase().includes('admin')) {
+
+    router.push('/admin');
+
+  } else {
+
+    router.push('/');
+
+  }
+
+  
+
+} catch (err: any) {
+
+  setError(err.response?.data || 'Invalid username or password');
+
+} finally {
+
+  setLoading(false);
+
+}
+
+};
+
+if (showSignUp) {
+
+return <SignUp onToggle={() => setShowSignUp(false)} onSignUpSuccess={() => setShowSignUp(false)} />;
+
+}
+
+return (
+
+<Container size={420} my={40}>
+
+  <Stack align="center" mb={20}>
+
+    <ThemeIcon size={60} radius="md">🚌</ThemeIcon>
+
+    <Title order={2}>Jordan Bus System</Title>
+
+    <Text c="dimmed">Sign in to continue</Text>
+
+  </Stack>
+
+
+
+  <Paper withBorder shadow="md" p={30} radius="md">
+
+    <form onSubmit={handleSubmit}>
+
+      <Stack>
+
+        {error && <Alert color="red">{error}</Alert>}
+
+
+
+        <TextInput
+
+          label="Username"
+
+          value={username}
+
+          onChange={(e) => setUsername(e.target.value)}
+
+          required
+
+        />
+
+
+
+        <PasswordInput
+
+          label="Password"
+
+          value={password}
+
+          onChange={(e) => setPassword(e.target.value)}
+
+          required
+
+        />
+
+
+
+        <Button type="submit" loading={loading}>
+
+          Login
+
+        </Button>
+
+      </Stack>
+
+    </form>
+
+
+
+    <Divider my="lg" label="or" />
+
+
+
+    <Text ta="center">
+
+      Don’t have an account?{' '}
+
+      <Anchor onClick={() => setShowSignUp(true)}>Sign up</Anchor>
+
+    </Text>
+
+  </Paper>
+
+</Container>
+
+);
+
+}
+
+
+
+اشرحهم بالتفصيل كيف بشتغلوا
+واحكيلي شو ال packages and libraries المستخدمين اذا موجود اشي  ?
